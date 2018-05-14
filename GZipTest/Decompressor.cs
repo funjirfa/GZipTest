@@ -6,6 +6,8 @@ namespace GZipTest
 {
     public class Decompressor : ICommand
     {
+        public event ProgressEventHandler ShowProgress;
+
         private long _originFileLength;
 
         private long _blockCount;
@@ -116,7 +118,7 @@ namespace GZipTest
                     }
 
                     counter++;
-                    blockPool.Progress("Decompressing", (double) counter / _blockCount);
+                    ShowProgress("Decompressing", (double) counter / _blockCount);
 
                     if (counter == _blockCount)
                     {

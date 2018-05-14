@@ -49,6 +49,7 @@
     <Compile Include="Operation.cs" />
     <Compile Include="ParseArgs.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="ProgressReport.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

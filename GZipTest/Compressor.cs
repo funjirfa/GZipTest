@@ -6,6 +6,8 @@ namespace GZipTest
 {
     public class Compressor : ICommand
     {
+        public event ProgressEventHandler ShowProgress;
+
         private long _originFileLength;
 
         private long _blockCount;
@@ -31,7 +33,7 @@ namespace GZipTest
                         blockPool.Complete();
                         break;
                     }
-
+                    
                     blockPool.Enqueue(new KeyValuePair<int, byte[]>( blockNumber, br.ReadBytes(1048576) ));
                 }
             }
@@ -96,7 +98,7 @@ namespace GZipTest
                     }
                     
                     counter++;
-                    blockPool.Progress("Compressing", (double) counter / _blockCount);
+                    ShowProgress("Compressing", (double) counter / _blockCount);
 
                     if (counter == _blockCount)
                     {

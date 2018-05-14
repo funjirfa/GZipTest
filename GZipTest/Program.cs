@@ -8,9 +8,9 @@ namespace GZipTest
     {
         private static int _cores = Environment.ProcessorCount * 2;
 
-        private static BlockPool _originalBlocks = new BlockPool();
+        private static BlockPool _originalBlocks = new BlockPool(_cores);
 
-        private static BlockPool _modifiedBlocks = new BlockPool();
+        private static BlockPool _modifiedBlocks = new BlockPool(_cores);
 
         private static Thread _reader;
 
@@ -20,9 +20,6 @@ namespace GZipTest
 
         static void Main(string[] args)
         {
-            Stopwatch sw = new Stopwatch();
-            sw.Start();
-
             ParseArgs options;
 
             try
@@ -45,6 +42,13 @@ namespace GZipTest
             {
                 Command = new Decompressor();
             }
+
+            ProgressReport progress = new ProgressReport();
+
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+
+            Command.ShowProgress += progress.ShowProgress;
 
             _writer = new Thread( delegate() { Command.Writer( options.Destination, ref _modifiedBlocks ); } );
             _reader = new Thread( delegate() { Command.Reader( options.Source, ref _originalBlocks ); } );
@@ -70,6 +74,8 @@ namespace GZipTest
             }
 
             _writer.Join();
+
+            Command.ShowProgress -= progress.ShowProgress;
 
             sw.Stop();
             TimeSpan ts = sw.Elapsed;
