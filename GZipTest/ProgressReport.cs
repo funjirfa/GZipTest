@@ -4,9 +4,21 @@ namespace GZipTest
 {
     public class ProgressReport
     {
-        public void ShowProgress(string command, double progress)
+        private readonly string Command;
+
+        public ProgressReport(string command)
         {
-            Console.Write("{0}:\t{1:P}\r", command, progress);
+            Command = command;
+        }
+
+        public void ShowProgress(double progress)
+        {
+            Console.Write("{0}: {1:P}\r", Command, progress);
+        }
+
+        public void Done(TimeSpan ts)
+        {
+            Console.Write("{0}: DONE! ({1:D2}:{2:D2}:{3:D2})", Command, ts.Hours, ts.Minutes, ts.Seconds);
         }
     }
 }

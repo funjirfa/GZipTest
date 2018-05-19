@@ -6,124 +6,142 @@ namespace GZipTest
 {
     public class Decompressor : ICommand
     {
+        public event CancellationEventHandler Cancel;
+
         public event ProgressEventHandler ShowProgress;
 
-        private long _originFileLength;
-
-        private long _blockCount;
-
-        private bool _isError = false;
-
-        private static int _lastBlockLength = GZip.BUFFER_SIZE;
-
-        public void Reader(string source, ref BlockPool blockPool)
+        public void Reader(string source, ref TaskPool readerTaskPool)
         {
-            FileInfo compressedFile = new FileInfo(source);
-            DriveInfo drive = new DriveInfo(compressedFile.Directory.Root.FullName);
-
             using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
             {
-                _originFileLength = br.ReadInt64();
+                br.BaseStream.Position = 16;
 
-                if (_originFileLength > 4294967296 && drive.DriveFormat == "FAT32")
-                {
-                    _isError = true;
-                    blockPool.Complete();
-                    throw new IOException("ERROR: операция прервана (FAT32 - недостаточно места на диске)");
-                }
-
-                if (_originFileLength % GZip.BUFFER_SIZE > 0)
-                {
-                    _lastBlockLength = (int) _originFileLength % GZip.BUFFER_SIZE;
-                }
-
-                _blockCount = br.ReadInt64();
-
-                for (int count = 0; count < _blockCount; count++)
+                for (int count = 0; count < FileSettings.BlockCount; count++)
                 {
                     int blockNumber = br.ReadInt32();
                     int blockLength = br.ReadInt32();
                     byte[] block = br.ReadBytes(blockLength);
-                    blockPool.Enqueue(new KeyValuePair<int, byte[]>(blockNumber, block));
+
+                    try
+                    {
+                        if (!readerTaskPool.TrySet(blockNumber, block))
+                        {
+                            return;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Cancel();
+                        Console.WriteLine(e.Message);
+                        return;
+                    }
                 }
             }
-
-            blockPool.Complete();
         }
 
-        public void Handler(ref BlockPool readBlockPool, ref BlockPool writeBlockPool)
+        public void Handler(ref TaskPool readerTaskPool, ref TaskPool writerTaskPool)
         {
+            int blockNumber = -1;
+            byte[] blockValue = null;
+
             while (true)
             {
-                if (_isError)
+                try
+                {
+                    if (!readerTaskPool.TryGet(out blockNumber, out blockValue))
+                    {
+                        return;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Cancel();
+                    Console.WriteLine(e.Message);
+                    return;
+                }
+
+                if (blockValue == null)
                 {
                     break;
                 }
 
-                KeyValuePair<int, byte[]> block = readBlockPool.Dequeue();
-
-                if (block.Value == null)
+                int blockLength = GZip.BUFFER_SIZE;
+                if (blockNumber == FileSettings.BlockCount - 1)
                 {
-                    break;
+                    blockLength = FileSettings.LastBlockLength;
                 }
 
-                byte[] decompressedBlock = null;
-
-                if (block.Key < _blockCount - 1)
+                try
                 {
-                    decompressedBlock = GZip.Decompress(block.Value, GZip.BUFFER_SIZE);
-                }
-                else
-                {
-                    decompressedBlock = GZip.Decompress(block.Value, _lastBlockLength);
-                }
+                    byte[] decompressedBlock = GZip.Decompress(blockValue, blockLength);
 
-                writeBlockPool.Enqueue(new KeyValuePair<int, byte[]>(block.Key, decompressedBlock));
+                    if (!writerTaskPool.TrySet(blockNumber, decompressedBlock))
+                    {
+                        return;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Cancel();
+                    Console.WriteLine(e.Message);
+                    return;
+                }
             }
         }
 
-        public void Writer(string destination, ref BlockPool blockPool)
+        public void Writer(string destination, ref TaskPool writerTaskPool)
         {
             int counter = 0;
 
-            if (_isError)
-            {
-                return;
-            }
+            int blockNumber = -1;
+            byte[] blockValue = null;
+
+            Dictionary<int, byte[]> buffer = new Dictionary<int, byte[]>();
 
             using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
             {
                 while (true)
                 {
-                    KeyValuePair<int, byte[]> block = blockPool.Dequeue();
+                    try
+                    {
+                        if (!writerTaskPool.TryGet(out blockNumber, out blockValue))
+                        {
+                            return;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Cancel();
+                        Console.WriteLine(e.Message);
+                        return;
+                    }
 
-                    if (block.Value == null)
+                    if (blockValue == null)
                     {
                         break;
                     }
 
-                    try
-                    {
-                        bw.BaseStream.Position = block.Key * GZip.BUFFER_SIZE;
-                        bw.Write(block.Value);
-                    }
-                    catch (IOException e)
-                    {
-                        Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
-                        bw.Close();
-                        File.Delete(destination);
-                        blockPool.Complete();
-                        _isError = true;
-                        return;
-                    }
+                    buffer[blockNumber] = blockValue;
 
-                    counter++;
-                    ShowProgress("Decompressing", (double) counter / _blockCount);
-
-                    if (counter == _blockCount)
+                    while (buffer.ContainsKey(counter))
                     {
-                        blockPool.Complete();
-                    }
+                        try
+                        {
+                            bw.Write(buffer[counter]);
+                            buffer.Remove(counter);
+                        }
+                        catch (IOException e)
+                        {
+                            Cancel();
+                            Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
+                            bw.Close();
+                            File.Delete(destination);
+                            return;
+                        }
+
+                        counter++;
+                        ShowProgress((double)counter / FileSettings.BlockCount);
+                    };
                 }
             }
         }

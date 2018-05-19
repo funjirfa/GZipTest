@@ -41,7 +41,8 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="BlockPool.cs" />
+    <Compile Include="FileSettings.cs" />
+    <Compile Include="TaskPool.cs" />
     <Compile Include="Compressor.cs" />
     <Compile Include="Decompressor.cs" />
     <Compile Include="GZip.cs" />

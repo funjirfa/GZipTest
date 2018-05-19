@@ -1,109 +1,138 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 
 namespace GZipTest
 {
     public class Compressor : ICommand
     {
+        public event CancellationEventHandler Cancel;
+
         public event ProgressEventHandler ShowProgress;
 
-        private long _originFileLength;
-
-        private long _blockCount;
-
-        private bool _isError = false;
-
-        public void Reader(string source, ref BlockPool blockPool)
+        public void Reader(string source, ref TaskPool readerTaskPool)
         {
-            FileInfo fi = new FileInfo(source);
-            _originFileLength = fi.Length;
-            _blockCount = _originFileLength / GZip.BUFFER_SIZE;
-            if (_blockCount % GZip.BUFFER_SIZE > 0)
-            {
-                _blockCount++;
-            }
-
             using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
             {
-                for (int blockNumber = 0; blockNumber < _blockCount; blockNumber++)
+                for (int blockNumber = 0; blockNumber < FileSettings.BlockCount; blockNumber++)
                 {
-                    if (_isError)
+                    int blockLength = GZip.BUFFER_SIZE;
+                    if (blockNumber == FileSettings.BlockCount - 1)
                     {
-                        blockPool.Complete();
-                        break;
+                        blockLength = FileSettings.LastBlockLength;
                     }
-                    
-                    blockPool.Enqueue(new KeyValuePair<int, byte[]>( blockNumber, br.ReadBytes(1048576) ));
+
+                    try
+                    {
+                        if (!readerTaskPool.TrySet(blockNumber, br.ReadBytes(blockLength)))
+                        {
+                            return;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Cancel();
+                        Console.WriteLine(e.Message);
+                        return;
+                    }
                 }
             }
-
-            blockPool.Complete();
         }
 
-        public void Handler(ref BlockPool readBlockPool, ref BlockPool writeBlockPool)
+        public void Handler(ref TaskPool readerTaskPool, ref TaskPool writerTaskPool)
         {
+            int blockNumber = -1;
+            byte[] blockValue = null;
+
             while (true)
             {
-                if (_isError)
+                try
+                {
+                    if (!readerTaskPool.TryGet(out blockNumber, out blockValue))
+                    {
+                        return;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Cancel();
+                    Console.WriteLine(e.Message);
+                    return;
+                }
+
+                if (blockValue == null)
                 {
                     break;
                 }
 
-                KeyValuePair<int, byte[]> block = readBlockPool.Dequeue();
-
-                if (block.Value == null)
+                try
                 {
-                    break;
+                    byte[] compressedBlock = GZip.Compress(blockValue);
+
+                    if (!writerTaskPool.TrySet(blockNumber, compressedBlock))
+                    {
+                        return;
+                    }
                 }
-
-                byte[] compressedBlock = GZip.Compress(block.Value);
-
-                writeBlockPool.Enqueue(new KeyValuePair<int, byte[]>( block.Key, compressedBlock ));
+                catch (Exception e)
+                {
+                    Cancel();
+                    Console.WriteLine(e.Message);
+                    return;
+                }
             }
         }
 
-        public void Writer(string destination, ref BlockPool blockPool)
+        public void Writer(string destination, ref TaskPool writerTaskPool)
         {
             int counter = 0;
 
+            int blockNumber = -1;
+            byte[] blockValue = null;
+
             using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
             {
-                bw.Write(BitConverter.GetBytes(_originFileLength));
-                bw.Write(BitConverter.GetBytes(_blockCount));
+                bw.Write(BitConverter.GetBytes(FileSettings.Length));
+                bw.Write(BitConverter.GetBytes(FileSettings.BlockCount));
 
                 while (true)
                 {
-                    KeyValuePair<int, byte[]> block = blockPool.Dequeue();
+                    try
+                    {
+                        if (!writerTaskPool.TryGet(out blockNumber, out blockValue))
+                        {
+                            return;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Cancel();
+                        Console.WriteLine(e.Message);
+                        return;
+                    }
 
-                    if (block.Value == null)
+                    if (blockValue == null)
                     {
                         break;
                     }
 
                     try
                     {
-                        bw.Write(BitConverter.GetBytes(block.Key));
-                        bw.Write(block.Value.Length);
-                        bw.Write(block.Value);
+                        bw.Write(BitConverter.GetBytes(blockNumber));
+                        bw.Write(blockValue.Length);
+                        bw.Write(blockValue);
                     }
                     catch (IOException e)
                     {
+                        Cancel();
                         Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
                         bw.Close();
                         File.Delete(destination);
-                        blockPool.Complete();
-                        _isError = true;
                         return;
                     }
-                    
-                    counter++;
-                    ShowProgress("Compressing", (double) counter / _blockCount);
 
-                    if (counter == _blockCount)
-                    {
-                        blockPool.Complete();
-                    }
+                    counter++;
+
+                    ShowProgress((double)counter / FileSettings.BlockCount);
                 }
             }
         }

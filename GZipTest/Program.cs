@@ -8,9 +8,9 @@ namespace GZipTest
     {
         private static int _cores = Environment.ProcessorCount * 2;
 
-        private static BlockPool _originalBlocks = new BlockPool(_cores);
+        private static TaskPool _readerTaskPool;
 
-        private static BlockPool _modifiedBlocks = new BlockPool(_cores);
+        private static TaskPool _writerTaskPool;
 
         private static Thread _reader;
 
@@ -34,53 +34,58 @@ namespace GZipTest
 
             ICommand Command = null;
 
+            ProgressReport progress;
+
             if (options.Command == Operation.Compress)
             {
                 Command = new Compressor();
+                progress = new ProgressReport("Compress");
             }
             else
             {
                 Command = new Decompressor();
+                progress = new ProgressReport("Decompress");
             }
 
-            ProgressReport progress = new ProgressReport();
+            _readerTaskPool = new TaskPool(_cores);
+            _writerTaskPool = new TaskPool(_cores);
 
             Stopwatch sw = new Stopwatch();
             sw.Start();
 
             Command.ShowProgress += progress.ShowProgress;
+            Command.Cancel += _readerTaskPool.Cancel;
+            Command.Cancel += _writerTaskPool.Cancel;
 
-            _writer = new Thread( delegate() { Command.Writer( options.Destination, ref _modifiedBlocks ); } );
-            _reader = new Thread( delegate() { Command.Reader( options.Source, ref _originalBlocks ); } );
+            _reader = new Thread(delegate () { Command.Reader(options.Source, ref _readerTaskPool); });
 
             for (int i = 0; i < _cores; i++)
             {
-                _handlers[i] = new Thread(delegate () { Command.Handler( ref _originalBlocks, ref _modifiedBlocks ); } );
+                _handlers[i] = new Thread(delegate () { Command.Handler(ref _readerTaskPool, ref _writerTaskPool); });
             }
 
-            _writer.Start();
+            _writer = new Thread(delegate () { Command.Writer(options.Destination, ref _writerTaskPool); });
 
+            _reader.Start();
             foreach (Thread handler in _handlers)
             {
                 handler.Start();
             }
+            _writer.Start();
 
-            _reader.Start();
-            _reader.Join();
-
+            _writer.Join();
             foreach (Thread handler in _handlers)
             {
                 handler.Join();
             }
-
-            _writer.Join();
-
-            Command.ShowProgress -= progress.ShowProgress;
+            _reader.Join();
 
             sw.Stop();
-            TimeSpan ts = sw.Elapsed;
+            progress.Done(sw.Elapsed);
 
-            Console.WriteLine("\nDONE!\t({0:D2}:{1:D2}:{2:D2})", ts.Hours, ts.Minutes, ts.Seconds);
+            Command.Cancel -= _writerTaskPool.Cancel;
+            Command.Cancel -= _readerTaskPool.Cancel;
+            Command.ShowProgress -= progress.ShowProgress;
         }
     }
 }

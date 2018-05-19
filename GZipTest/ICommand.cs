@@ -1,15 +1,19 @@
 ﻿namespace GZipTest
 {
-    public delegate void ProgressEventHandler(string command, double progress);
+    public delegate void CancellationEventHandler();
+
+    public delegate void ProgressEventHandler(double progress);
 
     interface ICommand
     {
+        event CancellationEventHandler Cancel;
+
         event ProgressEventHandler ShowProgress;
 
-        void Reader(string source, ref BlockPool blockPool);
+        void Reader(string source, ref TaskPool readerTaskPool);
 
-        void Handler(ref BlockPool readBlockPool, ref BlockPool writeBlockPool);
+        void Handler(ref TaskPool readerTaskPool, ref TaskPool writerTaskPool);
 
-        void Writer(string destination, ref BlockPool blockPool);
+        void Writer(string destination, ref TaskPool writerTaskPool);
     }
 }
