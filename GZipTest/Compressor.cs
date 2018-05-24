@@ -5,36 +5,62 @@ namespace GZipTest
 {
     public class Compressor : ICommand
     {
-        public event CancellationEventHandler Cancel;
+        private long _sourceLength;
+
+        private long _blockCount;
+
+        private bool _isDelete = false;
+
+        public event TerminationEventHandler Terminate;
 
         public event ProgressEventHandler ShowProgress;
 
         public void Reader(string source, ref TaskPool readerTaskPool)
         {
-            using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
+            try
             {
-                for (int blockNumber = 0; blockNumber < FileSettings.BlockCount; blockNumber++)
+                FileInfo fi = new FileInfo(source);
+                _sourceLength = fi.Length;
+                _blockCount = fi.Length / GZip.BUFFER_SIZE;
+                if (fi.Length % GZip.BUFFER_SIZE > 0)
                 {
-                    int blockLength = GZip.BUFFER_SIZE;
-                    if (blockNumber == FileSettings.BlockCount - 1)
-                    {
-                        blockLength = FileSettings.LastBlockLength;
-                    }
+                    _blockCount++;
+                }
+            }
+            catch (Exception e)
+            {
+                _isDelete = true;
+                Terminate();
+                Console.WriteLine(e.Message);
+                return; ;
+            }
 
-                    try
+            try
+            {
+                using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
+                {
+                    for (int blockNumber = 0; blockNumber < _blockCount; blockNumber++)
                     {
-                        if (!readerTaskPool.TrySet(blockNumber, br.ReadBytes(blockLength)))
+                        byte[] blockValue = br.ReadBytes(GZip.BUFFER_SIZE);
+
+                        if (blockValue == null)
+                        {
+                            throw new ArgumentNullException("blockValue", "ERROR: некорректное значение блока");
+                        }
+
+                        if (!readerTaskPool.TrySet(blockNumber, blockValue))
                         {
                             return;
                         }
                     }
-                    catch (Exception e)
-                    {
-                        Cancel();
-                        Console.WriteLine(e.Message);
-                        return;
-                    }
                 }
+            }
+            catch (Exception e)
+            {
+                _isDelete = true;
+                Terminate();
+                Console.WriteLine(e.Message);
+                return;
             }
         }
 
@@ -51,21 +77,12 @@ namespace GZipTest
                     {
                         return;
                     }
-                }
-                catch (Exception e)
-                {
-                    Cancel();
-                    Console.WriteLine(e.Message);
-                    return;
-                }
 
-                if (blockValue == null)
-                {
-                    break;
-                }
+                    if (blockValue == null)
+                    {
+                        break;
+                    }
 
-                try
-                {
                     byte[] compressedBlock = GZip.Compress(blockValue);
 
                     if (!writerTaskPool.TrySet(blockNumber, compressedBlock))
@@ -75,7 +92,8 @@ namespace GZipTest
                 }
                 catch (Exception e)
                 {
-                    Cancel();
+                    _isDelete = true;
+                    Terminate();
                     Console.WriteLine(e.Message);
                     return;
                 }
@@ -89,50 +107,67 @@ namespace GZipTest
             int blockNumber = -1;
             byte[] blockValue = null;
 
-            using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
+            try
             {
-                bw.Write(BitConverter.GetBytes(FileSettings.Length));
-                bw.Write(BitConverter.GetBytes(FileSettings.BlockCount));
-
-                while (true)
+                using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
                 {
-                    try
+                    bw.Write(BitConverter.GetBytes(_sourceLength));
+                    bw.Write(BitConverter.GetBytes(_blockCount));
+
+                    while (true)
                     {
                         if (!writerTaskPool.TryGet(out blockNumber, out blockValue))
                         {
                             return;
                         }
-                    }
-                    catch (Exception e)
-                    {
-                        Cancel();
-                        Console.WriteLine(e.Message);
-                        return;
-                    }
 
-                    if (blockValue == null)
-                    {
-                        break;
-                    }
+                        if (blockValue == null)
+                        {
+                            break;
+                        }
 
-                    try
-                    {
-                        bw.Write(BitConverter.GetBytes(blockNumber));
-                        bw.Write(blockValue.Length);
-                        bw.Write(blockValue);
-                    }
-                    catch (IOException e)
-                    {
-                        Cancel();
-                        Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
-                        bw.Close();
-                        File.Delete(destination);
-                        return;
-                    }
+                        try
+                        {
+                            bw.Write(BitConverter.GetBytes(blockNumber));
+                            bw.Write(blockValue.Length);
+                            bw.Write(blockValue);
+                        }
+                        catch (IOException e)
+                        {
+                            Terminate();
+                            Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
+                            bw.Close();
+                            File.Delete(destination);
+                            return;
+                        }
 
-                    counter++;
+                        counter++;
+                        ShowProgress((double)counter / _blockCount);
 
-                    ShowProgress((double)counter / FileSettings.BlockCount);
+                        if (counter == _blockCount)
+                        {
+                            Terminate();
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                _isDelete = true;
+                Terminate();
+                Console.WriteLine(e.Message);
+            }
+
+            if (_isDelete)
+            {
+                try
+                {
+                    File.Delete(destination);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e.Message);
+                    return;
                 }
             }
         }

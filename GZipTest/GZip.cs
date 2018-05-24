@@ -1,5 +1,6 @@
 ﻿using System.IO;
 using System.IO.Compression;
+using System.Linq;
 
 namespace GZipTest
 {
@@ -20,19 +21,21 @@ namespace GZipTest
             }
         }
 
-        public static byte[] Decompress(byte[] block, int size)
+        public static byte[] Decompress(byte[] block)
         {
-            byte[] decompressedBlock = new byte[size];
+            byte[] decompressedBlock = new byte[BUFFER_SIZE];
+
+            int size;
 
             using (MemoryStream compressedBlock = new MemoryStream(block))
             {
                 using (GZipStream zip = new GZipStream(compressedBlock, CompressionMode.Decompress))
                 {
-                    zip.Read(decompressedBlock, 0, size);
+                    size = zip.Read(decompressedBlock, 0, BUFFER_SIZE);
                 }
             }
 
-            return decompressedBlock;
+            return decompressedBlock.Take(size).ToArray();
         }
     }
 }

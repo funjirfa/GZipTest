@@ -6,36 +6,51 @@ namespace GZipTest
 {
     public class Decompressor : ICommand
     {
-        public event CancellationEventHandler Cancel;
+        private const long FAT32_MAX_FILE_SIZE = 4294967295;
+
+        private long _originLength;
+
+        private long _blockCount;
+
+        private bool _isDelete = false;
+
+        public event TerminationEventHandler Terminate;
 
         public event ProgressEventHandler ShowProgress;
 
         public void Reader(string source, ref TaskPool readerTaskPool)
         {
-            using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
+            try
             {
-                br.BaseStream.Position = 16;
-
-                for (int count = 0; count < FileSettings.BlockCount; count++)
+                using (BinaryReader br = new BinaryReader(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None)))
                 {
-                    int blockNumber = br.ReadInt32();
-                    int blockLength = br.ReadInt32();
-                    byte[] block = br.ReadBytes(blockLength);
+                    _originLength = br.ReadInt64();
+                    _blockCount = br.ReadInt64();
 
-                    try
+                    for (int count = 0; count < _blockCount; count++)
                     {
-                        if (!readerTaskPool.TrySet(blockNumber, block))
+                        int blockNumber = br.ReadInt32();
+                        int blockLength = br.ReadInt32();
+                        byte[] blockValue = br.ReadBytes(blockLength);
+
+                        if (blockValue == null)
+                        {
+                            throw new ArgumentNullException("blockValue", "ERROR: некорректное значение блока");
+                        }
+
+                        if (!readerTaskPool.TrySet(blockNumber, blockValue))
                         {
                             return;
                         }
                     }
-                    catch (Exception e)
-                    {
-                        Cancel();
-                        Console.WriteLine(e.Message);
-                        return;
-                    }
                 }
+            }
+            catch (Exception e)
+            {
+                _isDelete = true;
+                Terminate();
+                Console.WriteLine(e.Message);
+                return;
             }
         }
 
@@ -52,28 +67,13 @@ namespace GZipTest
                     {
                         return;
                     }
-                }
-                catch (Exception e)
-                {
-                    Cancel();
-                    Console.WriteLine(e.Message);
-                    return;
-                }
 
-                if (blockValue == null)
-                {
-                    break;
-                }
+                    if (blockValue == null)
+                    {
+                        break;
+                    }
 
-                int blockLength = GZip.BUFFER_SIZE;
-                if (blockNumber == FileSettings.BlockCount - 1)
-                {
-                    blockLength = FileSettings.LastBlockLength;
-                }
-
-                try
-                {
-                    byte[] decompressedBlock = GZip.Decompress(blockValue, blockLength);
+                    byte[] decompressedBlock = GZip.Decompress(blockValue);
 
                     if (!writerTaskPool.TrySet(blockNumber, decompressedBlock))
                     {
@@ -82,7 +82,8 @@ namespace GZipTest
                 }
                 catch (Exception e)
                 {
-                    Cancel();
+                    _isDelete = true;
+                    Terminate();
                     Console.WriteLine(e.Message);
                     return;
                 }
@@ -91,6 +92,22 @@ namespace GZipTest
 
         public void Writer(string destination, ref TaskPool writerTaskPool)
         {
+            try
+            {
+                FileInfo fi = new FileInfo(destination);
+                DriveInfo drive = new DriveInfo(fi.Directory.Root.FullName);
+                if (drive.DriveFormat == "FAT32" && _originLength > FAT32_MAX_FILE_SIZE)
+                {
+                    throw new IOException("ERROR: недостаточно места на диске записи распакованного файла (ограничение FAT32)");
+                }
+            }
+            catch (Exception e)
+            {
+                Terminate();
+                Console.WriteLine(e.Message);
+                return;
+            }
+
             int counter = 0;
 
             int blockNumber = -1;
@@ -98,50 +115,58 @@ namespace GZipTest
 
             Dictionary<int, byte[]> buffer = new Dictionary<int, byte[]>();
 
-            using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
+            try
             {
-                while (true)
+                using (BinaryWriter bw = new BinaryWriter(new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)))
                 {
-                    try
+                    while (true)
                     {
                         if (!writerTaskPool.TryGet(out blockNumber, out blockValue))
                         {
                             return;
                         }
-                    }
-                    catch (Exception e)
-                    {
-                        Cancel();
-                        Console.WriteLine(e.Message);
-                        return;
-                    }
 
-                    if (blockValue == null)
-                    {
-                        break;
-                    }
+                        if (blockValue == null)
+                        {
+                            break;
+                        }
 
-                    buffer[blockNumber] = blockValue;
+                        buffer[blockNumber] = blockValue;
 
-                    while (buffer.ContainsKey(counter))
-                    {
-                        try
+                        while (buffer.ContainsKey(counter))
                         {
                             bw.Write(buffer[counter]);
                             buffer.Remove(counter);
-                        }
-                        catch (IOException e)
-                        {
-                            Cancel();
-                            Console.WriteLine("ERROR: операция прервана ({0})", e.Message);
-                            bw.Close();
-                            File.Delete(destination);
-                            return;
-                        }
 
-                        counter++;
-                        ShowProgress((double)counter / FileSettings.BlockCount);
-                    };
+                            counter++;
+                            ShowProgress((double)counter / _blockCount);
+
+                            if (counter == _blockCount)
+                            {
+                                Terminate();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                _isDelete = true;
+                Terminate();
+                Console.WriteLine(e.Message);
+            }
+
+            if (_isDelete)
+            {
+                try
+                {
+                    File.Delete(destination);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e.Message);
+                    return;
                 }
             }
         }

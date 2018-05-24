@@ -54,8 +54,8 @@ namespace GZipTest
             sw.Start();
 
             Command.ShowProgress += progress.ShowProgress;
-            Command.Cancel += _readerTaskPool.Cancel;
-            Command.Cancel += _writerTaskPool.Cancel;
+            Command.Terminate += _readerTaskPool.Terminate;
+            Command.Terminate += _writerTaskPool.Terminate;
 
             _reader = new Thread(delegate () { Command.Reader(options.Source, ref _readerTaskPool); });
 
@@ -83,8 +83,8 @@ namespace GZipTest
             sw.Stop();
             progress.Done(sw.Elapsed);
 
-            Command.Cancel -= _writerTaskPool.Cancel;
-            Command.Cancel -= _readerTaskPool.Cancel;
+            Command.Terminate -= _writerTaskPool.Terminate;
+            Command.Terminate -= _readerTaskPool.Terminate;
             Command.ShowProgress -= progress.ShowProgress;
         }
     }

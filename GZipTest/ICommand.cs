@@ -1,12 +1,12 @@
 ﻿namespace GZipTest
 {
-    public delegate void CancellationEventHandler();
+    public delegate void TerminationEventHandler();
 
     public delegate void ProgressEventHandler(double progress);
 
     interface ICommand
     {
-        event CancellationEventHandler Cancel;
+        event TerminationEventHandler Terminate;
 
         event ProgressEventHandler ShowProgress;
 

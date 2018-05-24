@@ -5,8 +5,6 @@ namespace GZipTest
 {
     public class ParseArgs
     {
-        private const long FAT32_MAX_FILE_SIZE = 4294967295;
-
         public Operation Command;
 
         public readonly string Source;
@@ -45,38 +43,6 @@ namespace GZipTest
             }
 
             Destination = args[2];
-
-            if (Command == Operation.Compress)
-            {
-                FileInfo fi = new FileInfo(Source);
-                FileSettings.Length = fi.Length;
-                FileSettings.BlockCount = fi.Length / GZip.BUFFER_SIZE;
-                if (fi.Length % GZip.BUFFER_SIZE > 0)
-                {
-                    FileSettings.BlockCount++;
-                }
-            }
-            else
-            {
-                using (BinaryReader br = new BinaryReader(new FileStream(Source, FileMode.Open, FileAccess.Read, FileShare.None)))
-                {
-                    FileSettings.Length = br.ReadInt64();
-                    FileSettings.BlockCount = br.ReadInt64();
-                }
-
-                FileInfo fi = new FileInfo(Destination);
-                DriveInfo drive = new DriveInfo(fi.Directory.Root.FullName);
-
-                if (drive.DriveFormat == "FAT32" && FileSettings.Length > FAT32_MAX_FILE_SIZE)
-                {
-                    throw new IOException("ERROR: недостаточно места на диске записи распакованного файла (ограничение FAT32)");
-                }
-            }
-
-            if (FileSettings.Length % GZip.BUFFER_SIZE > 0)
-            {
-                FileSettings.LastBlockLength = (int)(FileSettings.Length % GZip.BUFFER_SIZE);
-            }
         }
     }
 }
